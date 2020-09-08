@@ -1,0 +1,7 @@
+---
+applications:
+- buildpack: https://github.com/cloudfoundry/staticfile-buildpack.git
+  host: simple-toolchain-20200213172555434
+  name: simple-toolchain-20200213172555434
+  memory: 64M
+  stack: cflinuxfs2
