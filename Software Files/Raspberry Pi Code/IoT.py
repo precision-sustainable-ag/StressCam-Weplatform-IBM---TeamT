@@ -1,3 +1,4 @@
+
 #!/usr/bin/env python3
 #!/home/pi/.local/lib/python3.7/site-packages
 
@@ -18,6 +19,8 @@ import argparse
 import time
 import os
 from subprocess import call
+from subprocess import Popen
+import linecache
 
 import platform
 import json
@@ -49,8 +52,8 @@ import numpy as np
 ############Global Variables########################################
 imageWidth = 640
 imageHeight = 480
-imageResolutionX = 1920
-imageResolutionY = 1080
+imageResolutionX = 2592  #(2592,1944) (1920,1080)
+imageResolutionY = 1944
 imageFormat = '.jpg'
 imageFrameRate = 10
 
@@ -59,11 +62,11 @@ imageFrameRate = 10
 
 orgId = "szcn70"     #IBM IoT Organization Id
 typeId = "Camera"    #IBM IoT Device type
-deviceId = "0001"    #IBM IoT Device identification
+deviceId = "0002"    #IBM IoT Device identification
 token = "ConnectedFarms" #IBM IoT Authentication Token
 cameraLatitude = "35.763886"
 cameraLongitude = "-78.718038"
-statusInterval = 360   #Wait x seconds before sending another status update
+statusInterval = 720   #Wait x seconds before sending another status update
 
 #########################################################################
 from uuid import getnode as get_mac
@@ -108,11 +111,18 @@ def commandProcessor(cmd):
 
     print("Command received: %s" % command)
     if(command == "takeImage"):
+        print("Camera Opening")
         camera = PiCamera()  #Set camera parameters
+        print("setting rotation")
         camera.rotation = 180
+        print("setting resolution")
         camera.resolution = (imageResolutionX,imageResolutionY)
         camera.framerate = imageFrameRate
-        camera.capture('/home/pi/images/' + currDate + currTime + imageFormat, resize=(imageWidth, imageHeight))
+        print("setting date")
+        currDate = datetime.datetime.now().strftime("%Y-%m-%d")
+        currTime = datetime.datetime.now().strftime("%H:%M:%S")
+        print("capturing image")
+        camera.capture('/home/pi/images/' + currDate +'-' + currTime + imageFormat) #, resize=(imageWidth, imageHeight))
         camera.close()
         #camera.stop_preview()
         print("Image Taken")
@@ -123,25 +133,25 @@ def commandProcessor(cmd):
             imageWidth = int(cmd.data['Width']) #Max 2592 x 1944
             print("Images Resized to", imageWidth,"x", imageHeight)
         else:
-            print("Images not reszied, size too large")
+            print("Images not resized, size too large")
     if(command == "changeSendInterval"):
-        statusInterval = int(cmd.data['Interval'])
-        print("Interval Changed to:", statusInterval)
+        statusInterval = int(cmd.data['Interval'])*60
+        print("Interval Changed to:", statusInterval,"seconds")
     if(command == "runScript"):
-        print("runScript")
         script = cmd.data['scriptType']
-        try:
-            call(['sh', script])
-        except:
-            call(['python3', script])
+        print("Running Script"+ script)
+        if(script[-2:]=='py'):
+            call(['python3', '/home/pi'+script])
+        else:
+            call(['sudo','sh', '/home/pi'+script])
     if(command == "sendCodeStatus"):
         print("sendCodeStatus")
     if(command == "changeSchedule"):
         print("changeSchedule")
         startTimeStr = cmd.data['startTime']
         endTimeStr = cmd.data['endTime']
-        startTime = datetime.datetime.strptime(startTimeStr,"%H:%M:%S")
-        endTime = datetime.datetime.strptime(endTimeStr,"%H:%M:%S")
+        startTime = datetime.datetime.strptime(startTimeStr,"%H:%M")
+        endTime = datetime.datetime.strptime(endTimeStr,"%H:%M")
         onTimeHours = endTime.hour - startTime.hour
         onTimeMin = endTime.minute - startTime.minute
 
@@ -157,16 +167,22 @@ def commandProcessor(cmd):
             onTimeHours = onTimeHours-1
             onTimeMin = 60 - abs(onTimeMin)
             offTimeMin = 60 - onTimeMin
-        f =  open('/home/pi/wittyPi/schedule.wpi','w')
-        f.write('BEGIN 2015-08-01 '+ startTimeStr+ '\n')
-        f.write('END 2025-07-31 23:59:59'+ '\n')
-        f.write('ON H'+ str(onTimeHours) + ' M' + str(onTimeMin)+ '\n')
-        f.write('OFF H'+ str(offTimeHours)+ ' M' + str(offTimeMin)+ '\n')
+        f =  open('/home/pi/wittyPi/schedules/schedule.wpi','w')
+        f.write('BEGIN   2015-08-01 '+ startTimeStr+':00'+ '\n')
+        f.write('END     2025-07-31 23:59:59'+ '\n')
+        f.write('ON      H'+ str(onTimeHours) + ' M' + str(onTimeMin)+ '\n')
+        f.write('OFF     H'+ str(offTimeHours)+ ' M' + str(offTimeMin))
         f.close
     if(command == "imageFormat"):
-        print("imageFormat")#JPG or RAW
-        if(cmd.data['imageFormat'] == '.jpg' or '.raw'):
-            imageFormat = cmd.data['imageFormat']
+        print("imageFormat")#JPG or PNG or BMP
+        if(cmd.data['imageFormat'] == '.jpg'):
+            imageFormat = '.jpg'
+            print("Format changed to:"+imageFormat)
+        elif(cmd.data['imageFormat'] == '.png'):
+            imageFormat = '.png'
+            print("Format changed to:"+imageFormat)
+        elif(cmd.data['imageFormat'] == '.bmp'):
+            imageFormat = '.bmp'
             print("Format changed to:"+imageFormat)
         else:
             print("Incompatible format")
@@ -174,16 +190,28 @@ def commandProcessor(cmd):
         imageFrameRate =  int(cmd.data['frames'])
 
         print("Frame Rate changed to:", imageFrameRate)#range(10fps-30fps)
-    if(command == "sendSensorData"):
+    if(command == "sendData"):
         print("SensorData Published")
-        canopyTemp = mlx.object_temperature
-        airTemp = mlx.ambient_temperature
-        luxes = veml7700.light
+        try:
+            canopyTemp = 99 #mlx.object_temperature
+            airTemp = 99 #mlx.ambient_temperature
+            luxes = veml7700.light
+        except OSError:
+            pass
         #Verify values are correct
         while((canopyTemp >100) or (airTemp>100)):
-            canopyTemp = mlx.object_temperature
-            airTemp = mlx.ambient_temperature
-
+            try:
+                canopyTemp = 99 #mlx.object_temperature
+                airTemp = 99 #mlx.ambient_temperature
+            except OSError:
+                pass
+       # with open('/home/pi/test.txt','w+') as fout:
+       #     wittyPi = Popen(["sudo","/home/pi/wittyPi/wittyPi.sh"],stdout=fout)
+       #     sleep(15)
+       #     os.system("sudo kill %s" %(wittyPi.pid,))
+       #     tempLine = linecache.getline("/home/pi/test.txt",8)
+       #     wittyPiTemp = float(tempLine[25:30])
+       #     fout.close()
         data = {
             "DEVICE_ID": deviceId,
             "DEVICE_STATUS": "On",
@@ -259,13 +287,12 @@ if __name__ == "__main__":
         currDate = datetime.datetime.now().strftime("%Y-%m-%d")
         currTime = datetime.datetime.now().strftime("%H:%M:%S")
         print("taking Image")
-        camera.capture('/home/pi/images/' + currDate + '-'+currTime + imageFormat,resize=(imageWidth,imageHeight))
+        camera.capture('/home/pi/images/' + currDate + '-' + currTime + imageFormat) #,resize=(imageWidth,imageHeight))
         camera.close()
         #im = imread('/home/pi/images/'+currDate+currTime+imageFormat)
         #Uncomment the above line to use the ML model on the taken image
         file = '/home/pi/Pictures/' + street[i]
         im = imread(file)
-        i= i+1 #Score next image
         sleep(5)
         print("resizing image")
         im_final = resize(im,(200,200))#Model was trained on 200x200 images
@@ -298,6 +325,7 @@ if __name__ == "__main__":
         f.write(street[i] + " : Water Stress Level:" + str(waterStressLevel)+","+str('%.2f'%percentConfident)+"% Confident"+"\n")
         f.close
         print(street[i])
+        i= i+1 #Score next image
         print("Water Stress Level", waterStressLevel)
         print("Percent Confident", '%.2f' % percentConfident)
         #CPU Temp
@@ -307,12 +335,12 @@ if __name__ == "__main__":
         print("Sensor Reading")
         #Sensor Reading
         i2c = busio.I2C(board.SCL, board.SDA, frequency=100000)
-        mlx = adafruit_mlx90614.MLX90614(i2c)
+        #mlx = adafruit_mlx90614.MLX90614(i2c)
         veml7700 = adafruit_veml7700.VEML7700(i2c)
         while True:
             try:
-                canopyTemp = mlx.object_temperature
-                airTemp = mlx.ambient_temperature
+                canopyTemp = 99 #mlx.object_temperature
+                airTemp = 99 #mlx.ambient_temperature
                 luxes = veml7700.light
                 break
             except OSError:
@@ -320,10 +348,18 @@ if __name__ == "__main__":
         #Verify values are correct
         while((canopyTemp >100) or (airTemp>100)):
             try:
-                canopyTemp = mlx.object_temperature
-                airTemp = mlx.ambient_temperature
+                canopyTemp = 99 #mlx.object_temperature
+                airTemp = 99 #mlx.ambient_temperature
             except OSError:
                 pass
+        #Get wittyPi Temperature
+        #with open('/home/pi/test.txt','w+') as fout:
+        #    wittyPi = Popen(["sudo","/home/pi/wittyPi/wittyPi.sh"],stdout=fout)
+        #    sleep(15)
+        #    os.system("sudo kill %s" %(wittyPi.pid,))
+        #    tempLine = linecache.getline("/home/pi/test.txt",8)
+        #    wittyPiTemp = float(tempLine[25:30])
+        #    fout.close()
         data = {
             "DEVICE_ID": deviceId,
             "DEVICE_STATUS": "On",
@@ -332,7 +368,7 @@ if __name__ == "__main__":
             "WATER_STRESS_LEVEL":waterStressLevel,
             "CANOPY_TEMPERATURE":'%.2f' % canopyTemp,
             "AIR_TEMPERATURE": '%.2f' % airTemp,
-            "WITTYPI_TEMPERATURE":  random.randrange(30,40),
+            "WITTYPI_TEMPERATURE": random.randrange(30,40), #wittyPiTemp,
             "CPU_TEMPERATURE": cpuTemp,
             "LUXOMETER":luxes,
             "DATE_1":currDate,
@@ -341,7 +377,7 @@ if __name__ == "__main__":
         print("Sending Data")
         client.publishEvent("status","json", data)
 
-        with open('data.txt', 'a') as outfile:
+        with open('/home/pi/data.txt', 'a') as outfile:
             json.dump(data, outfile)
             outfile.write('\n')
         sleep(statusInterval)
